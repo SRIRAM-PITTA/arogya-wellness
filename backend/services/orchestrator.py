@@ -302,6 +302,7 @@ async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGener
     # 6) Lifestyle Agent - second pass, refines using fitness & diet
     # Trim memory first to prevent token limit errors (context grows large by this point)
     trim_memory()
+    refined_lifestyle_prompt = (
         f"Symptoms: {symptoms}\n\n"
         f"Diet plan summary:\n{diet_result}\n\n"
         f"Fitness plan summary:\n{fitness_result}\n\n"
