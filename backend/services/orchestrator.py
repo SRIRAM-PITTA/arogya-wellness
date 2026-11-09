@@ -1,23 +1,23 @@
-import json
+﻿import json
 import re
 from typing import AsyncGenerator, Dict, Any
 
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 
-from healthbackend.services.api_key_pool import (
+from services.api_key_pool import (
     get_next_key,
     mark_key_quota_exceeded,
 )
-from healthbackend.services.agents import (
+from services.agents import (
     symptom_agent,
     lifestyle_agent,
     diet_agent,
     fitness_agent,
 )
-from healthbackend.services.history_store import save_history
-from healthbackend.services.memory import get_shared_memory, reset_memory
-from healthbackend.config.settings import GROQ_MODEL_NAME
+from services.history_store import save_history
+from services.memory import get_shared_memory, reset_memory, trim_memory
+from config.settings import GROQ_MODEL_NAME, GROQ_REQUEST_TIMEOUT_SECONDS
 
 
 # ---------------------------------------------------------------------
@@ -31,6 +31,7 @@ def _make_synth_llm_with_key():
         api_key=key,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.0,  # deterministic JSON
+        timeout=GROQ_REQUEST_TIMEOUT_SECONDS,
     )
     return llm, key
 
@@ -56,12 +57,12 @@ def _build_markdown_table(output: dict) -> str:
 
 
 # ---------------------------------------------------------------------
-# Main orchestration (non‑streaming, used by /health-assist)
+# Main orchestration (nonâ€‘streaming, used by /health-assist)
 # ---------------------------------------------------------------------
 async def orchestrate(
     symptoms: str, medical_report: str, user_id: str
 ) -> Dict[str, Any]:
-    """Run the full multi‑agent pipeline and return structured JSON."""
+    """Run the full multiâ€‘agent pipeline and return structured JSON."""
 
     # Reset shared memory for this session
     reset_memory()
@@ -128,15 +129,15 @@ async def orchestrate(
                 "Read the full conversation between symptom_agent, lifestyle_agent, "
                 "diet_agent, and fitness_agent.\n\n"
                 "Write a concise, well-structured wellness plan in markdown with these sections:\n"
-                "1. Overview – 2-3 sentences summarizing the situation and overall goal.\n"
-                "2. When to See a Doctor – 2-4 bullet points, clearly describing red-flag symptoms.\n"
-                "3. Lifestyle & Rest – 3-5 bullet points with specific, gentle daily actions.\n"
-                "4. Hydration & Diet – 3-5 bullet points with simple, safe food and fluid guidance.\n"
-                "5. Hygiene & Environment – 2-4 bullet points to reduce irritation and infection spread.\n"
-                "6. Movement & Activity – 2-4 bullet points with ONLY low-intensity options, "
+                "1. Overview â€“ 2-3 sentences summarizing the situation and overall goal.\n"
+                "2. When to See a Doctor â€“ 2-4 bullet points, clearly describing red-flag symptoms.\n"
+                "3. Lifestyle & Rest â€“ 3-5 bullet points with specific, gentle daily actions.\n"
+                "4. Hydration & Diet â€“ 3-5 bullet points with simple, safe food and fluid guidance.\n"
+                "5. Hygiene & Environment â€“ 2-4 bullet points to reduce irritation and infection spread.\n"
+                "6. Movement & Activity â€“ 2-4 bullet points with ONLY low-intensity options, "
                 "including a bold STOP warning for chest pain, breathing difficulty, dizziness, "
                 "or marked worsening.\n"
-                "7. Final Note – 1-2 sentences reminding that this is not a diagnosis and to "
+                "7. Final Note â€“ 1-2 sentences reminding that this is not a diagnosis and to "
                 "follow a doctor's advice.\n\n"
                 "Tone: calm, reassuring, non-alarming, strictly non-diagnostic. "
                 "Never name specific medicines or doses. Never say you replace a doctor.\n\n"
@@ -153,7 +154,7 @@ async def orchestrate(
     try:
         final_answer = await synth_llm.ainvoke(synth_messages)
     except Exception:
-        # Key likely hit quota or hard failure → rotate and retry once
+        # Key likely hit quota or hard failure â†’ rotate and retry once
         mark_key_quota_exceeded(synth_key)
         synth_llm, synth_key = _make_synth_llm_with_key()
         final_answer = await synth_llm.ainvoke(synth_messages)
@@ -214,45 +215,45 @@ async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGener
     # 1) Symptom Agent
     yield {
         "type": "thought",
-        "content": "User → Orchestrator: new wellness query received.",
+        "content": "User â†’ Orchestrator: new wellness query received.",
     }
     yield {
         "type": "thought",
-        "content": "Orchestrator → SymptomAgent: analyze primary symptoms.",
+        "content": "Orchestrator â†’ SymptomAgent: analyze primary symptoms.",
     }
     symptom_result = await symptom_agent(symptoms)
     yield {
         "type": "thought",
         "content": (
-            "SymptomAgent → Orchestrator: symptom profile ready "
+            "SymptomAgent â†’ Orchestrator: symptom profile ready "
             f"(example: {symptom_result[:160]}...)."
         ),
     }
 
-    # 2) Symptom → Diet + Lifestyle (parallel conceptually)
+    # 2) Symptom â†’ Diet + Lifestyle (parallel conceptually)
     yield {
         "type": "thought",
-        "content": "SymptomAgent → DietAgent: sending symptom profile for diet constraints.",
+        "content": "SymptomAgent â†’ DietAgent: sending symptom profile for diet constraints.",
     }
     yield {
         "type": "thought",
-        "content": "SymptomAgent → LifestyleAgent: sending symptom profile for lifestyle checks.",
+        "content": "SymptomAgent â†’ LifestyleAgent: sending symptom profile for lifestyle checks.",
     }
 
-    # 3) Lifestyle Agent – first pass
+    # 3) Lifestyle Agent â€“ first pass
     lifestyle_result = await lifestyle_agent(symptoms)
     yield {
         "type": "thought",
         "content": (
-            "LifestyleAgent → Orchestrator: first-pass lifestyle guidance ready "
+            "LifestyleAgent â†’ Orchestrator: first-pass lifestyle guidance ready "
             f"(sleep, routine, stress). Example: {lifestyle_result[:160]}..."
         ),
     }
 
-    # 4) Diet Agent – uses symptoms + lifestyle constraints
+    # 4) Diet Agent â€“ uses symptoms + lifestyle constraints
     yield {
         "type": "thought",
-        "content": "Orchestrator → DietAgent: generate plan using symptoms + lifestyle constraints.",
+        "content": "Orchestrator â†’ DietAgent: generate plan using symptoms + lifestyle constraints.",
     }
     diet_result = await diet_agent(
         symptoms=symptoms,
@@ -262,21 +263,21 @@ async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGener
     yield {
         "type": "thought",
         "content": (
-            "DietAgent → Orchestrator: diet & hydration plan ready. "
+            "DietAgent â†’ Orchestrator: diet & hydration plan ready. "
             f"Example: {diet_result[:160]}..."
         ),
     }
 
-    # Diet → Fitness
+    # Diet â†’ Fitness
     yield {
         "type": "thought",
         "content": (
-            "DietAgent → FitnessAgent: sending energy & restriction profile "
+            "DietAgent â†’ FitnessAgent: sending energy & restriction profile "
             "to shape safe activity level."
         ),
     }
 
-    # 5) Fitness Agent – uses diet restrictions
+    # 5) Fitness Agent â€“ uses diet restrictions
     fitness_result = await fitness_agent(
         symptoms=symptoms,
         diet_notes=diet_result,
@@ -284,22 +285,23 @@ async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGener
     yield {
         "type": "thought",
         "content": (
-            "FitnessAgent → Orchestrator: movement plan ready "
+            "FitnessAgent â†’ Orchestrator: movement plan ready "
             f"(light / restricted). Example: {fitness_result[:160]}..."
         ),
     }
 
-    # Fitness → Lifestyle: check for behavior conflicts
+    # Fitness â†’ Lifestyle: check for behavior conflicts
     yield {
         "type": "thought",
         "content": (
-            "FitnessAgent → LifestyleAgent: sharing activity plan to detect "
+            "FitnessAgent â†’ LifestyleAgent: sharing activity plan to detect "
             "conflicts with fatigue, sleep, or routine."
         ),
     }
 
-    # 6) Lifestyle Agent – second pass, refines using fitness & diet
-    refined_lifestyle_prompt = (
+    # 6) Lifestyle Agent - second pass, refines using fitness & diet
+    # Trim memory first to prevent token limit errors (context grows large by this point)
+    trim_memory()
         f"Symptoms: {symptoms}\n\n"
         f"Diet plan summary:\n{diet_result}\n\n"
         f"Fitness plan summary:\n{fitness_result}\n\n"
@@ -309,26 +311,26 @@ async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGener
     yield {
         "type": "thought",
         "content": (
-            "LifestyleAgent → DietAgent & FitnessAgent: updated lifestyle "
+            "LifestyleAgent â†’ DietAgent & FitnessAgent: updated lifestyle "
             "constraints (sleep, stress, routine) shared for consistency."
         ),
     }
     yield {
         "type": "thought",
         "content": (
-            "LifestyleAgent → Orchestrator: refined lifestyle guidance ready. "
+            "LifestyleAgent â†’ Orchestrator: refined lifestyle guidance ready. "
             f"Example: {refined_lifestyle[:160]}..."
         ),
     }
 
-    # 7) All agents → Synthesizer
+    # 7) All agents â†’ Synthesizer
     history = memory.load_memory_variables({})["chat_history"]
     synth_llm, synth_key = _make_synth_llm_with_key()
 
     yield {
         "type": "thought",
         "content": (
-            "Orchestrator → OutputSynthesizer: combining Symptom, Diet, "
+            "Orchestrator â†’ OutputSynthesizer: combining Symptom, Diet, "
             "Lifestyle, and Fitness outputs into one plan."
         ),
     }
@@ -367,5 +369,6 @@ async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGener
     # 8) Final delivery
     yield {
         "type": "thought",
-        "content": "OutputSynthesizer → Orchestrator → User: final wellness plan delivered.",
+        "content": "OutputSynthesizer â†’ Orchestrator â†’ User: final wellness plan delivered.",
     }
+

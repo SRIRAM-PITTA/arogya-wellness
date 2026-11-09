@@ -3,7 +3,8 @@ import json
 import os
 
 # Define the JSON file path used to store user chat or session history
-FILE = "healthbackend/storage/history.json"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FILE = os.path.join(BASE_DIR, "storage", "history.json")
 
 
 # ------------------------------------------------------------

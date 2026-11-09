@@ -1,20 +1,12 @@
-import os
 import time
 import threading
-from typing import List, Dict
+from typing import Dict, List
 
-from dotenv import load_dotenv
-load_dotenv()
+from config.settings import GROQ_API_KEY
 
-# Read all keys from env: XAI_API_KEY=key1,key2,key3
-_keys: List[str] = [
-    k.strip()
-    for k in os.getenv("GROQ_API_KEY", "").split(",")
-    if k.strip()
-]
-
-# For each key, track when it becomes usable again (epoch seconds)
-_key_state: Dict[str, float] = {k: 0.0 for k in _keys}
+# Keys and their cooldown state are loaded lazily after dotenv has initialized.
+_keys: List[str] = []
+_key_state: Dict[str, float] = {}
 
 # Lock to keep operations thread-safe
 _lock = threading.Lock()
@@ -23,9 +15,21 @@ _lock = threading.Lock()
 COOLDOWN_SECONDS = 3600  # 1 hour
 
 
+def _refresh_keys() -> None:
+    configured_keys = [
+        key.strip() for key in (GROQ_API_KEY or "").split(",") if key.strip()
+    ]
+    if set(configured_keys) == set(_keys):
+        return
+    for key in configured_keys:
+        _key_state.setdefault(key, 0.0)
+    _keys[:] = configured_keys
+
+
 def get_next_key() -> str:
     """Return the next available Grok/xAI API key, skipping keys in cooldown."""
     with _lock:
+        _refresh_keys()
         if not _keys:
             raise RuntimeError("No GROQ_API_KEY configured")
 
@@ -48,3 +52,4 @@ def mark_key_quota_exceeded(key: str) -> None:
     with _lock:
         if key in _key_state:
             _key_state[key] = time.time() + COOLDOWN_SECONDS
+

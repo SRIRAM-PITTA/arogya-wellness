@@ -1,7 +1,8 @@
 import os
 import json
 
-FILE = "healthbackend/storage/users.json"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FILE = os.path.join(BASE_DIR, "storage", "users.json")
 
 
 def _load_users():
@@ -12,6 +13,7 @@ def _load_users():
 
 
 def _save_users(users):
+    os.makedirs(os.path.dirname(FILE), exist_ok=True)
     with open(FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, indent=2)
 

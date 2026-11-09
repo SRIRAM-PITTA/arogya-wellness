@@ -131,18 +131,30 @@ function WellnessPage({ userId, userName, onLogout }) {
         }),
       });
 
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => ({}));
+        throw new Error(errorBody.error || `Request failed (${res.status})`);
+      }
+
+      if (!res.body) {
+        throw new Error("The server did not return a response stream.");
+      }
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
+      let streamError = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n\n");
-
-        lines.forEach((line) => {
-          if (!line.startsWith("data: ")) return;
+        buffer += decoder.decode(value, { stream: true });
+        let boundary;
+        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+          const line = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (!line.startsWith("data: ")) continue;
           try {
             const jsonStr = line.replace("data: ", "");
             const evt = JSON.parse(jsonStr);
@@ -154,13 +166,16 @@ function WellnessPage({ userId, userName, onLogout }) {
               setStreamAnswer((prev) => prev + evt.content);
               // mirror into summary so the wellness card updates live
               setSummary((prev) => prev + evt.content);
+            } else if (evt.type === "error") {
+              streamError =
+                evt.content || "The AI service could not complete the request.";
             }
           } catch (err) {
             console.error("Stream parse error", err);
           }
-        });
+        }
       }
-      setStatus("");
+      setStatus(streamError);
     } catch (err) {
       setStatus(`Error while streaming: ${err.message}`);
     } finally {

@@ -5,17 +5,17 @@ import logging
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
-from healthbackend.services.user_profile_store import save_profile, get_profile
-from healthbackend.services.orchestrator import (
+from services.user_profile_store import save_profile, get_profile
+from services.orchestrator import (
     orchestrate,
     stream_agent_updates,  # NEW: import streaming helper
 )
-from healthbackend.services.history_store import get_history
-from healthbackend.utils.exceptions import AuthError, InputError, AgentError
-from healthbackend.services.user_auth_store import check_credentials, create_user
-from healthbackend.config.settings import GROQ_API_KEY, GROQ_MODEL_NAME, YOUTUBE_API_KEY
-from healthbackend.services.api_key_pool import get_next_key
-from healthbackend.services.youtube_recommendations import YouTubeRecommendationService
+from services.history_store import get_history
+from utils.exceptions import AuthError, InputError, AgentError
+from services.user_auth_store import check_credentials, create_user
+from config.settings import GROQ_API_KEY, GROQ_MODEL_NAME, YOUTUBE_API_KEY
+from services.api_key_pool import get_next_key
+from services.youtube_recommendations import YouTubeRecommendationService
 from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 
@@ -348,10 +348,22 @@ def chat_stream():
                 yield chunk
         except StopAsyncIteration:
             pass
+        except Exception as e:
+            logger.exception("/chat_stream agent workflow failed")
+            yield f"data: {json.dumps({'type': 'error', 'content': f'AI Service Error: {str(e)}'})}\n\n"
         finally:
+            loop.run_until_complete(async_gen.aclose())
             loop.close()
 
-    return Response(stream_with_context(generate()), mimetype="text/event-stream")
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # -------------------------
@@ -465,3 +477,4 @@ def welcome_health():
 # -------------------------
 if __name__ == "__main__":
     app.run(debug=False)
+
