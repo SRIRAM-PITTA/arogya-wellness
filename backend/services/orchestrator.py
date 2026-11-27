@@ -9,28 +9,24 @@ from services.api_key_pool import (
     get_next_key,
     mark_key_quota_exceeded,
 )
-from services.agents import (
-    symptom_agent,
-    lifestyle_agent,
-    diet_agent,
-    fitness_agent,
-)
+from services.agents import symptom_agent
 from services.history_store import save_history
-from services.memory import get_shared_memory, reset_memory, trim_memory
+from services.memory import get_shared_memory, reset_memory
 from config.settings import GROQ_MODEL_NAME, GROQ_REQUEST_TIMEOUT_SECONDS
 
 
 # ---------------------------------------------------------------------
-# Synthesizer LLM helper
+# Synthesizer / Wellness Agent LLM helper
 # ---------------------------------------------------------------------
 def _make_synth_llm_with_key():
     """Create the synthesizer LLM using the next available Groq API key."""
     key = get_next_key()
     llm = ChatOpenAI(
-        model=GROQ_MODEL_NAME,  # e.g. "llama-3.3-70b-versatile"
+        model=GROQ_MODEL_NAME,
         api_key=key,
         base_url="https://api.groq.com/openai/v1",
-        temperature=0.0,  # deterministic JSON
+        temperature=0.0,
+        max_tokens=450,
         timeout=GROQ_REQUEST_TIMEOUT_SECONDS,
     )
     return llm, key
@@ -48,122 +44,73 @@ def _build_markdown_table(output: dict) -> str:
         parts.append(f"**{title}**")
         parts.append(text.strip())
 
-    add_block("Symptom agent", output.get("symptom_analysis", ""))
-    add_block("Lifestyle agent", output.get("lifestyle", ""))
-    add_block("Diet agent", output.get("diet", ""))
-    add_block("Fitness agent", output.get("fitness", ""))
+    add_block("Symptom & Triage Agent", output.get("symptom_analysis", ""))
+    add_block("Wellness Guidance (Diet, Fitness & Lifestyle)", output.get("synthesized_guidance", ""))
 
     return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------
-# Main orchestration (nonâ€‘streaming, used by /health-assist)
+# Main orchestration (non-streaming, used by /health-assist)
 # ---------------------------------------------------------------------
 async def orchestrate(
     symptoms: str, medical_report: str, user_id: str
 ) -> Dict[str, Any]:
-    """Run the full multiâ€‘agent pipeline and return structured JSON."""
+    """Run the streamlined 2-agent pipeline and return structured JSON."""
 
-    # Reset shared memory for this session
     reset_memory()
-    memory = get_shared_memory()
-
-    # Track agent communication flow
     agent_flow = []
 
-    # 1. Symptom agent
+    # 1. Symptom & Triage Agent (LLM Call 1)
     symptom_result = await symptom_agent(symptoms)
     agent_flow.append(
         {
-            "agent": "Symptom Agent",
+            "agent": "Symptom & Triage Agent",
             "output": symptom_result,
         }
     )
 
-    # 2. Lifestyle agent
-    lifestyle_result = await lifestyle_agent(symptoms)
-    agent_flow.append(
-        {
-            "agent": "Lifestyle Agent",
-            "output": lifestyle_result,
-        }
-    )
-
-    # 3. Diet agent (uses lifestyle)
-    diet_result = await diet_agent(
-        symptoms=symptoms,
-        report=medical_report,
-        lifestyle_notes=lifestyle_result,
-    )
-    agent_flow.append(
-        {
-            "agent": "Diet Agent",
-            "output": diet_result,
-        }
-    )
-
-    # 4. Fitness agent (uses diet)
-    fitness_result = await fitness_agent(
-        symptoms=symptoms,
-        diet_notes=diet_result,
-    )
-    agent_flow.append(
-        {
-            "agent": "Fitness Agent",
-            "output": fitness_result,
-        }
-    )
-
-    # Conversation history for synthesis
-    history = memory.load_memory_variables({})["chat_history"]
-
-    # -----------------------------------------------------------------
-    # Synthesizer LLM: combine all agent outputs into JSON wellness plan
-    # -----------------------------------------------------------------
+    # 2. Wellness Guidance Agent (LLM Call 2)
     synth_llm, synth_key = _make_synth_llm_with_key()
 
     synth_messages = [
         SystemMessage(
             content=(
-                "You are an orchestrator summarizing a mild to moderate health concern.\n"
-                "Read the full conversation between symptom_agent, lifestyle_agent, "
-                "diet_agent, and fitness_agent.\n\n"
-                "Write a concise, well-structured wellness plan in markdown with these sections:\n"
-                "1. Overview â€“ 2-3 sentences summarizing the situation and overall goal.\n"
-                "2. When to See a Doctor â€“ 2-4 bullet points, clearly describing red-flag symptoms.\n"
-                "3. Lifestyle & Rest â€“ 3-5 bullet points with specific, gentle daily actions.\n"
-                "4. Hydration & Diet â€“ 3-5 bullet points with simple, safe food and fluid guidance.\n"
-                "5. Hygiene & Environment â€“ 2-4 bullet points to reduce irritation and infection spread.\n"
-                "6. Movement & Activity â€“ 2-4 bullet points with ONLY low-intensity options, "
-                "including a bold STOP warning for chest pain, breathing difficulty, dizziness, "
-                "or marked worsening.\n"
-                "7. Final Note â€“ 1-2 sentences reminding that this is not a diagnosis and to "
-                "follow a doctor's advice.\n\n"
-                "Tone: calm, reassuring, non-alarming, strictly non-diagnostic. "
-                "Never name specific medicines or doses. Never say you replace a doctor.\n\n"
+                "You are an expert health and wellness assistant.\n"
+                "Review the user symptoms, medical report, and clinical triage notes below.\n\n"
+                "Write a concise, reassuring, non-diagnostic wellness plan in markdown with these sections:\n"
+                "1. Overview - Brief summary of the situation.\n"
+                "2. When to See a Doctor - 2-3 key red-flag symptoms.\n"
+                "3. Lifestyle & Rest - 2-3 gentle daily habits, sleep, or stress tips.\n"
+                "4. Diet & Hydration - 2-3 simple, safe food and fluid guidance points.\n"
+                "5. Movement & Activity - 2 safe, low-intensity options with a STOP warning if pain occurs.\n"
+                "6. Final Note - 1 sentence reminding that this does not replace a doctor's advice.\n\n"
+                "Tone: calm, reassuring, strictly non-diagnostic. Never prescribe medications.\n\n"
                 "Return ONLY valid JSON with keys:\n"
                 "  - synthesized_guidance: the markdown text described above\n"
-                "  - recommendations: array of short, plain-language recommendation strings\n"
-                "Do not wrap JSON in code fences or add any extra text."
+                "  - recommendations: array of 3-4 short recommendation strings\n"
+                "Do not wrap JSON in code fences or add extra text."
             )
         ),
-        *history,
-        HumanMessage(content="Generate the JSON response now."),
+        HumanMessage(
+            content=(
+                f"User Symptoms: {symptoms}\n"
+                f"Medical Report: {medical_report or 'None'}\n"
+                f"Symptom Analysis: {symptom_result}\n\n"
+                "Generate the JSON response now."
+            )
+        ),
     ]
 
     try:
         final_answer = await synth_llm.ainvoke(synth_messages)
     except Exception:
-        # Key likely hit quota or hard failure â†’ rotate and retry once
         mark_key_quota_exceeded(synth_key)
         synth_llm, synth_key = _make_synth_llm_with_key()
         final_answer = await synth_llm.ainvoke(synth_messages)
 
     raw = final_answer.content.strip()
 
-    # ------------------------------------------------------------
-    # JSON Cleaning and Parsing
-    # ------------------------------------------------------------
     if raw.startswith("```"):
         raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
@@ -173,191 +120,114 @@ async def orchestrate(
     except json.JSONDecodeError:
         data = {"synthesized_guidance": raw, "recommendations": []}
 
-    # ------------------------------------------------------------
-    # Final Output Structure
-    # ------------------------------------------------------------
+    guidance = data.get("synthesized_guidance", "")
+    recommendations = data.get("recommendations", [])
+
+    agent_flow.append(
+        {
+            "agent": "Wellness & Lifestyle Agent",
+            "output": guidance[:200] + "...",
+        }
+    )
+
     output = {
         "user_id": user_id,
         "query": symptoms,
         "symptom_analysis": symptom_result,
-        "lifestyle": lifestyle_result,
-        "diet": diet_result,
-        "fitness": fitness_result,
-        "synthesized_guidance": data.get("synthesized_guidance", ""),
-        "recommendations": data.get("recommendations", []),
+        "lifestyle": "Rest, hydration, and stress reduction outlined in the wellness plan.",
+        "diet": "Balanced hydration and nutrition guidance included in the plan.",
+        "fitness": "Low-intensity safe movement included in the plan.",
+        "synthesized_guidance": guidance,
+        "recommendations": recommendations,
         "agent_flow": agent_flow,
     }
 
-    # Add markdown table summary
     output["table_markdown"] = _build_markdown_table(output)
-
     save_history(user_id, output)
     return output
 
 
 # ---------------------------------------------------------------------
-# Streaming helper - agent communication for UI
+# Streaming helper - agent communication for UI (used by /chat_stream)
 # ---------------------------------------------------------------------
 async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGenerator[Dict[str, str], None]:
     """
-    Async generator that yields 'thought' and 'answer' events for the UI,
-    reflecting a mesh-style multi-agent workflow:
-
-    User -> Orchestrator -> Symptom
-    Symptom -> Diet + Lifestyle
-    Lifestyle <-> Diet, Diet -> Fitness, Fitness -> Lifestyle
-    All -> Synthesizer -> Orchestrator -> User
+    Stream agent collaboration thought events and answer tokens for the UI.
+    Streamlined 2-agent design:
+    1. Symptom & Triage Agent -> assesses urgency & clinical severity.
+    2. Wellness & Lifestyle Agent -> streams full personalized plan (Diet + Fitness + Routine).
     """
 
     reset_memory()
-    memory = get_shared_memory()
 
-    # 1) Symptom Agent
+    # Step 1: Notify UI of incoming query
     yield {
         "type": "thought",
-        "content": "User â†’ Orchestrator: new wellness query received.",
+        "content": "User → Orchestrator: new wellness query received.",
     }
     yield {
         "type": "thought",
-        "content": "Orchestrator â†’ SymptomAgent: analyze primary symptoms.",
+        "content": "Orchestrator → SymptomAgent: analyzing primary symptoms and severity.",
     }
+
+    # Step 2: Run Symptom & Triage Agent (LLM Call 1)
     symptom_result = await symptom_agent(symptoms)
+
     yield {
         "type": "thought",
         "content": (
-            "SymptomAgent â†’ Orchestrator: symptom profile ready "
-            f"(example: {symptom_result[:160]}...)."
+            f"SymptomAgent → Orchestrator: clinical profile ready ({symptom_result[:130]}...)"
         ),
     }
 
-    # 2) Symptom â†’ Diet + Lifestyle (parallel conceptually)
     yield {
         "type": "thought",
-        "content": "SymptomAgent â†’ DietAgent: sending symptom profile for diet constraints.",
-    }
-    yield {
-        "type": "thought",
-        "content": "SymptomAgent â†’ LifestyleAgent: sending symptom profile for lifestyle checks.",
+        "content": "SymptomAgent → WellnessAgent: passing symptom profile for diet, fitness & lifestyle planning.",
     }
 
-    # 3) Lifestyle Agent â€“ first pass
-    lifestyle_result = await lifestyle_agent(symptoms)
     yield {
         "type": "thought",
-        "content": (
-            "LifestyleAgent â†’ Orchestrator: first-pass lifestyle guidance ready "
-            f"(sleep, routine, stress). Example: {lifestyle_result[:160]}..."
-        ),
+        "content": "WellnessAgent: formulating holistic nutrition, safe movement, and daily routine plan...",
     }
 
-    # 4) Diet Agent â€“ uses symptoms + lifestyle constraints
-    yield {
-        "type": "thought",
-        "content": "Orchestrator â†’ DietAgent: generate plan using symptoms + lifestyle constraints.",
-    }
-    diet_result = await diet_agent(
-        symptoms=symptoms,
-        report=medical_report,
-        lifestyle_notes=lifestyle_result,
-    )
-    yield {
-        "type": "thought",
-        "content": (
-            "DietAgent â†’ Orchestrator: diet & hydration plan ready. "
-            f"Example: {diet_result[:160]}..."
-        ),
-    }
-
-    # Diet â†’ Fitness
-    yield {
-        "type": "thought",
-        "content": (
-            "DietAgent â†’ FitnessAgent: sending energy & restriction profile "
-            "to shape safe activity level."
-        ),
-    }
-
-    # 5) Fitness Agent â€“ uses diet restrictions
-    fitness_result = await fitness_agent(
-        symptoms=symptoms,
-        diet_notes=diet_result,
-    )
-    yield {
-        "type": "thought",
-        "content": (
-            "FitnessAgent â†’ Orchestrator: movement plan ready "
-            f"(light / restricted). Example: {fitness_result[:160]}..."
-        ),
-    }
-
-    # Fitness â†’ Lifestyle: check for behavior conflicts
-    yield {
-        "type": "thought",
-        "content": (
-            "FitnessAgent â†’ LifestyleAgent: sharing activity plan to detect "
-            "conflicts with fatigue, sleep, or routine."
-        ),
-    }
-
-    # 6) Lifestyle Agent - second pass, refines using fitness & diet
-    # Trim memory first to prevent token limit errors (context grows large by this point)
-    trim_memory()
-    refined_lifestyle_prompt = (
-        f"Symptoms: {symptoms}\n\n"
-        f"Diet plan summary:\n{diet_result}\n\n"
-        f"Fitness plan summary:\n{fitness_result}\n\n"
-        "Adjust lifestyle guidance if any conflicts or overloads are detected."
-    )
-    refined_lifestyle = await lifestyle_agent(refined_lifestyle_prompt)
-    yield {
-        "type": "thought",
-        "content": (
-            "LifestyleAgent â†’ DietAgent & FitnessAgent: updated lifestyle "
-            "constraints (sleep, stress, routine) shared for consistency."
-        ),
-    }
-    yield {
-        "type": "thought",
-        "content": (
-            "LifestyleAgent â†’ Orchestrator: refined lifestyle guidance ready. "
-            f"Example: {refined_lifestyle[:160]}..."
-        ),
-    }
-
-    # 7) All agents â†’ Synthesizer
-    history = memory.load_memory_variables({})["chat_history"]
+    # Step 3: Stream Wellness Plan tokens (LLM Call 2)
     synth_llm, synth_key = _make_synth_llm_with_key()
-
-    yield {
-        "type": "thought",
-        "content": (
-            "Orchestrator â†’ OutputSynthesizer: combining Symptom, Diet, "
-            "Lifestyle, and Fitness outputs into one plan."
-        ),
-    }
 
     synth_messages = [
         SystemMessage(
             content=(
-                "You are an orchestrator summarizing a mild to moderate health concern.\n"
-                "You receive outputs from:\n"
-                "- SymptomAgent (symptom profile)\n"
-                "- LifestyleAgent (may be called twice: initial + refined)\n"
-                "- DietAgent (diet & hydration plan)\n"
-                "- FitnessAgent (movement plan)\n\n"
-                "Produce a single safe wellness plan in markdown. "
-                "Do not diagnose or prescribe medicines."
+                "You are an expert wellness and lifestyle coach.\n"
+                "Review the user symptoms, optional medical report, and clinical triage analysis.\n\n"
+                "Produce a structured wellness plan in clean markdown with these sections:\n"
+                "## 1. Overview\n"
+                "Brief 2-3 sentence overview of the concern.\n\n"
+                "## 2. When to See a Doctor\n"
+                "2-3 clear bullet points on red-flag symptoms.\n\n"
+                "## 3. Lifestyle & Rest\n"
+                "3 simple daily tips (sleep hygiene, stress management, hydration).\n\n"
+                "## 4. Diet & Nutrition\n"
+                "3 gentle food and hydration recommendations (foods to favor/avoid).\n\n"
+                "## 5. Movement & Physical Activity\n"
+                "2 light, safe activity ideas with an explicit warning to stop if discomfort occurs.\n\n"
+                "## 6. Medical Disclaimer\n"
+                "Reminder that this is non-diagnostic wellness guidance and does not replace professional medical care.\n\n"
+                "Tone: calm, reassuring, strictly non-diagnostic. Never prescribe medications."
             )
         ),
-        *history,
-        HumanMessage(content="Generate the wellness plan now."),
+        HumanMessage(
+            content=(
+                f"User Symptoms: {symptoms}\n"
+                f"Medical Report: {medical_report or 'None'}\n"
+                f"Symptom Triage Analysis: {symptom_result}\n\n"
+                "Generate the complete markdown wellness plan now."
+            )
+        ),
     ]
 
     try:
         async for chunk in synth_llm.astream(synth_messages):
             text = getattr(chunk, "content", "") or ""
             if text:
-                # Stream final answer tokens
                 yield {"type": "answer", "content": text}
     except Exception:
         mark_key_quota_exceeded(synth_key)
@@ -367,9 +237,7 @@ async def stream_agent_updates(symptoms: str, medical_report: str) -> AsyncGener
             if text:
                 yield {"type": "answer", "content": text}
 
-    # 8) Final delivery
     yield {
         "type": "thought",
-        "content": "OutputSynthesizer â†’ Orchestrator â†’ User: final wellness plan delivered.",
+        "content": "WellnessAgent → Orchestrator → User: personalized wellness plan delivered successfully.",
     }
-

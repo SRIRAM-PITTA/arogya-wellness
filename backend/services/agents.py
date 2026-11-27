@@ -1,4 +1,4 @@
-from langchain_openai import ChatOpenAI
+﻿from langchain_openai import ChatOpenAI
 from langchain.schema import HumanMessage, SystemMessage
 
 from config.settings import GROQ_MODEL_NAME, GROQ_REQUEST_TIMEOUT_SECONDS
@@ -14,15 +14,16 @@ def _make_llm_with_key():
     Returns:
         tuple[ChatOpenAI, str]: (llm instance, api_key used)
     """
-    # Pick the next key from the pool (handles round‑robin and cooldown logic)
+    # Pick the next key from the pool (handles roundâ€‘robin and cooldown logic)
     api_key = get_next_key()
 
-    # Instantiate the Grok chat model with that key (OpenAI‑compatible)
+    # Instantiate the Grok chat model with that key (OpenAIâ€‘compatible)
     llm = ChatOpenAI(
         model=GROQ_MODEL_NAME,          # e.g. "grok-3" or "grok-3-fast"
         api_key=api_key,
         base_url="https://api.groq.com/openai/v1",
         temperature=0.0,
+        max_tokens=250,
         timeout=GROQ_REQUEST_TIMEOUT_SECONDS,
     )
     return llm, api_key
@@ -31,7 +32,7 @@ def _make_llm_with_key():
 def _memory():
     """
     Convenience wrapper to get the shared conversation memory object.
-    All agents write into the same buffer so they can see each other’s outputs.
+    All agents write into the same buffer so they can see each otherâ€™s outputs.
     """
     return get_shared_memory()
 
@@ -67,7 +68,7 @@ async def symptom_agent(symptoms: str) -> str:
     try:
         result = await llm.ainvoke(messages)
     except Exception:
-        # This key may have hit quota or another hard failure → mark & retry once
+        # This key may have hit quota or another hard failure â†’ mark & retry once
         mark_key_quota_exceeded(key)
         llm, key = _make_llm_with_key()
         result = await llm.ainvoke(messages)
@@ -130,7 +131,7 @@ async def diet_agent(symptoms: str, report: str, lifestyle_notes: str) -> str:
       - optional medical report text
       - output of lifestyle_agent
       - retrieved snippets from local knowledge base (RAG)
-    The guidance is strictly non‑diagnostic and non‑prescriptive.
+    The guidance is strictly nonâ€‘diagnostic and nonâ€‘prescriptive.
     """
     memory = _memory()
     history = memory.load_memory_variables({})["chat_history"]
@@ -175,7 +176,7 @@ async def diet_agent(symptoms: str, report: str, lifestyle_notes: str) -> str:
 # ------------------------------------------------------------
 async def fitness_agent(symptoms: str, diet_notes: str) -> str:
     """
-    Recommend gentle, low‑risk physical activities that respect
+    Recommend gentle, lowâ€‘risk physical activities that respect
     both the symptoms and the diet constraints.
     Always reminds the user to stop if they feel discomfort and to
     consult a doctor before more intense exercise.
@@ -186,7 +187,7 @@ async def fitness_agent(symptoms: str, diet_notes: str) -> str:
     prompt = (
         f"User symptoms: {symptoms}\n"
         f"Diet constraints from diet_agent: {diet_notes}\n\n"
-        "Recommend only low‑risk, gentle physical activities, "
+        "Recommend only lowâ€‘risk, gentle physical activities, "
         "and clearly tell the user to stop if they feel pain or discomfort."
     )
 
@@ -194,7 +195,7 @@ async def fitness_agent(symptoms: str, diet_notes: str) -> str:
         SystemMessage(
             content=(
                 "You are a cautious fitness coach. "
-                "You design simple, low‑intensity plans that are generally safe. "
+                "You design simple, lowâ€‘intensity plans that are generally safe. "
                 "Always recommend consulting a doctor before heavy exercise."
             )
         ),

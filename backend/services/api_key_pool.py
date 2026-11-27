@@ -12,7 +12,7 @@ _key_state: Dict[str, float] = {}
 _lock = threading.Lock()
 
 # How long to disable a key after quota error (seconds)
-COOLDOWN_SECONDS = 3600  # 1 hour
+COOLDOWN_SECONDS = 30
 
 
 def _refresh_keys() -> None:
@@ -27,7 +27,7 @@ def _refresh_keys() -> None:
 
 
 def get_next_key() -> str:
-    """Return the next available Grok/xAI API key, skipping keys in cooldown."""
+    """Return the next available Groq API key, skipping keys in cooldown."""
     with _lock:
         _refresh_keys()
         if not _keys:
@@ -36,9 +36,8 @@ def get_next_key() -> str:
         now = time.time()
         available = [k for k in _keys if _key_state.get(k, 0) <= now]
         if not available:
-            raise RuntimeError(
-                "All Groq API keys are currently in cooldown due to quota limits."
-            )
+            # Fallback to configured keys so single-key configurations don't hard crash
+            available = _keys[:]
 
         # Simple round-robin: take first available, move it to the end
         key = available[0]
@@ -52,4 +51,3 @@ def mark_key_quota_exceeded(key: str) -> None:
     with _lock:
         if key in _key_state:
             _key_state[key] = time.time() + COOLDOWN_SECONDS
-
